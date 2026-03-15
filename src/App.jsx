@@ -15,6 +15,7 @@ const DEFAULT_TASKS = [
   "Houtwerk schoonmaken",
   "Rolemmers schoonmaken",
   "Boodschappen doen",
+  "Koken",
   "Afwassen",
   "Heg snoeien",
   "Tuin opruimen",
@@ -22,6 +23,11 @@ const DEFAULT_TASKS = [
   "Sneeuw ruimen",
   "Anders...",
 ];
+
+// Taken met een vast bedrag in plaats van uurtarief
+const FIXED_PRICE_TASKS = {
+  "Koken": [2.50, 5.00],
+};
 
 const COLORS = ["#2a7a2e", "#1a5fa8", "#e07b3c", "#8a6fb5", "#b85c8a", "#c0953a"];
 const GREEN = "#2a7a2e";
@@ -44,9 +50,9 @@ export default function App() {
   const [view, setView] = useState("logboek");
   const [form, setForm] = useState({
     clientId: "", date: new Date().toISOString().slice(0, 10),
-    task: DEFAULT_TASKS[0], customTask: "", hours: "", minutes: "0", notes: "",
+    task: DEFAULT_TASKS[0], customTask: "", hours: "", minutes: "0", notes: "", fixedPrice: "",
   });
-  const [newClient, setNewClient] = useState({ name: "", rate: "8.50", color: COLORS[3] });
+  const [newClient, setNewClient] = useState({ name: "", rate: "8.50", color: COLORS[3], whatsapp: "" });
   const [editClientId, setEditClientId] = useState(null);
   const [editRate, setEditRate] = useState("");
   const [filter, setFilter] = useState("all");
@@ -76,22 +82,31 @@ export default function App() {
 
   const getClient = (id) => clients.find((c) => c.id === id);
   const totalHours = (entry) => parseFloat(entry.hours || 0) + parseFloat(entry.minutes || 0) / 60;
+  const entryAmount = (entry, client) => {
+    if (entry.fixedAmount != null) return entry.fixedAmount;
+    return totalHours(entry) * (client?.rate || 0);
+  };
+
+  const isFixedTask = (task) => Object.keys(FIXED_PRICE_TASKS).includes(task);
 
   const addEntry = async () => {
-    if (!form.clientId || !form.date || form.hours === "") return;
+    const taskName = form.task === "Anders..." ? form.customTask : form.task;
+    if (!form.clientId || !form.date) return;
+    if (isFixedTask(taskName) && form.fixedPrice === "") return;
+    if (!isFixedTask(taskName) && form.hours === "" && (form.minutes === "0" || form.minutes === "")) return;
     setSaving(true);
-    const task = form.task === "Anders..." ? form.customTask : form.task;
     await addDoc(collection(db, "entries"), {
       clientId: form.clientId,
       date: form.date,
-      task,
-      hours: parseFloat(form.hours) || 0,
-      minutes: parseFloat(form.minutes) || 0,
+      task: taskName,
+      hours: isFixedTask(taskName) ? 0 : parseFloat(form.hours) || 0,
+      minutes: isFixedTask(taskName) ? 0 : parseFloat(form.minutes) || 0,
+      fixedAmount: isFixedTask(taskName) ? parseFloat(form.fixedPrice) : null,
       notes: form.notes,
       invoiced: false,
       createdAt: new Date().toISOString(),
     });
-    setForm({ ...form, task: DEFAULT_TASKS[0], customTask: "", hours: "", minutes: "0", notes: "" });
+    setForm({ ...form, task: DEFAULT_TASKS[0], customTask: "", hours: "", minutes: "0", notes: "", fixedPrice: "" });
     setSaving(false);
     setShowSuccess(true);
     setTimeout(() => setShowSuccess(false), 2500);
@@ -113,13 +128,32 @@ export default function App() {
       name: newClient.name,
       rate: parseFloat(newClient.rate),
       color: newClient.color,
+      whatsapp: newClient.whatsapp || "",
     });
-    setNewClient({ name: "", rate: "8.50", color: COLORS[(clients.length) % COLORS.length] });
+    setNewClient({ name: "", rate: "8.50", color: COLORS[(clients.length) % COLORS.length], whatsapp: "" });
   };
 
   const updateRate = async (id) => {
     await updateDoc(doc(db, "clients", id), { rate: parseFloat(editRate) });
     setEditClientId(null);
+  };
+
+  const updateWhatsapp = async (id, number) => {
+    await updateDoc(doc(db, "clients", id), { whatsapp: number });
+  };
+
+  const sendWhatsApp = (client, clientEntries) => {
+    const total = clientEntries.reduce((s, e) => s + entryAmount(e, client), 0);
+    const regels = clientEntries.map(e => {
+      const h = Math.floor(e.hours);
+      const m = parseInt(e.minutes);
+      const tijd = e.fixedAmount != null ? "vast bedrag" : (h > 0 ? h + "u" : "") + (m > 0 ? " " + m + "min" : "");
+      return "• " + formatDate(e.date) + ": " + e.task + " (" + tijd + ") = " + formatEuro(entryAmount(e, client));
+    }).join("\n");
+    const betaallink = "https://betaalverzoek.rabobank.nl/betaalverzoek/?color=ff6600&name=" + encodeURIComponent("Giel") + "&amount=" + total.toFixed(2) + "&description=" + encodeURIComponent("Klussen Giel");
+    const bericht = "Hoi " + client.name + "! 👋\n\nHier is mijn betalingsverzoek voor de uitgevoerde werkzaamheden:\n\n" + regels + "\n\n💰 *Totaal: " + formatEuro(total) + "*\n\nJe kunt betalen via deze Rabobank link:\n" + betaallink + "\n\nBedankt! 🧢 Giel";
+    const nummer = client.whatsapp.replace(/[^0-9]/g, "").replace(/^0/, "31");
+    window.open("https://wa.me/" + nummer + "?text=" + encodeURIComponent(bericht), "_blank");
   };
 
   const deleteClient = async (id) => {
@@ -250,27 +284,41 @@ export default function App() {
                       onChange={(e) => setForm({ ...form, customTask: e.target.value })} style={{ ...inp, marginTop: 8 }} />
                   )}
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 14 }}>
-                  <div>
-                    <Lbl>Uren</Lbl>
-                    <input type="number" min="0" max="24" placeholder="0" value={form.hours}
-                      onChange={(e) => setForm({ ...form, hours: e.target.value })} style={inp} />
-                  </div>
-                  <div>
-                    <Lbl>Minuten</Lbl>
-                    <select value={form.minutes} onChange={(e) => setForm({ ...form, minutes: e.target.value })} style={inp}>
-                      {[0, 15, 30, 45].map((m) => <option key={m} value={m}>{m} min</option>)}
+                {isFixedTask(form.task) ? (
+                  <div style={{ marginTop: 14 }}>
+                    <Lbl>Bedrag</Lbl>
+                    <select value={form.fixedPrice} onChange={(e) => setForm({ ...form, fixedPrice: e.target.value })} style={inp}>
+                      <option value="">— Kies een bedrag —</option>
+                      {FIXED_PRICE_TASKS[form.task].map((p) => (
+                        <option key={p} value={p}>{formatEuro(p)} (vast bedrag)</option>
+                      ))}
                     </select>
                   </div>
-                </div>
-                {form.clientId && form.hours !== "" && (
+                ) : (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 14 }}>
+                    <div>
+                      <Lbl>Uren</Lbl>
+                      <input type="number" min="0" max="24" placeholder="0" value={form.hours}
+                        onChange={(e) => setForm({ ...form, hours: e.target.value })} style={inp} />
+                    </div>
+                    <div>
+                      <Lbl>Minuten</Lbl>
+                      <select value={form.minutes} onChange={(e) => setForm({ ...form, minutes: e.target.value })} style={inp}>
+                        {[0, 15, 30, 45].map((m) => <option key={m} value={m}>{m} min</option>)}
+                      </select>
+                    </div>
+                  </div>
+                )}
+                {form.clientId && (isFixedTask(form.task) ? form.fixedPrice !== "" : (form.hours !== "" || (form.minutes !== "0" && form.minutes !== ""))) && (
                   <div style={{
                     marginTop: 12, background: LIGHTGREEN, border: `2px solid ${GREEN}55`,
                     borderRadius: 10, padding: "10px 16px", display: "flex", justifyContent: "space-between", alignItems: "center",
                   }}>
                     <span style={{ color: GREEN, fontWeight: 600, fontSize: 14 }}>💰 Bedrag deze klus:</span>
                     <span style={{ color: GREEN, fontWeight: 900, fontSize: 22 }}>
-                      {formatEuro((parseFloat(form.hours || 0) + parseFloat(form.minutes || 0) / 60) * (getClient(form.clientId)?.rate || 0))}
+                      {isFixedTask(form.task)
+                        ? formatEuro(parseFloat(form.fixedPrice) || 0)
+                        : formatEuro((parseFloat(form.hours || 0) + parseFloat(form.minutes || 0) / 60) * (getClient(form.clientId)?.rate || 0))}
                     </span>
                   </div>
                 )}
@@ -279,7 +327,7 @@ export default function App() {
                   <input type="text" placeholder="Extra opmerkingen..." value={form.notes}
                     onChange={(e) => setForm({ ...form, notes: e.target.value })} style={inp} />
                 </div>
-                <Gbtn onClick={addEntry} disabled={!form.clientId || !form.date || form.hours === "" || saving}
+                <Gbtn onClick={addEntry} disabled={!form.clientId || !form.date || (isFixedTask(form.task) ? form.fixedPrice === "" : (form.hours === "" && (form.minutes === "0" || form.minutes === ""))) || saving}
                   style={{ marginTop: 18, width: "100%", fontSize: 16 }}>
                   {saving ? "⏳ Opslaan..." : "✅ Opslaan"}
                 </Gbtn>
@@ -291,7 +339,7 @@ export default function App() {
                 <Stitle>Nog niet afgerekend</Stitle>
                 {uninvoiced.slice(0, 5).map((e) => {
                   const cl = getClient(e.clientId);
-                  return <Ecard key={e.id} entry={e} client={cl} amount={totalHours(e) * (cl?.rate || 0)} onDelete={() => deleteEntry(e.id)} />;
+                  return <Ecard key={e.id} entry={e} client={cl} amount={entryAmount(e, cl)} onDelete={() => deleteEntry(e.id)} />;
                 })}
                 {uninvoiced.length > 5 && (
                   <div style={{ textAlign: "center", color: "#888", fontSize: 13, marginTop: 8 }}>
@@ -316,7 +364,7 @@ export default function App() {
             ) : (
               Object.entries(byClient(uninvoiced)).map(([clientId, clientEntries]) => {
                 const cl = getClient(clientId);
-                const total = clientEntries.reduce((s, e) => s + totalHours(e) * (cl?.rate || 0), 0);
+                const total = clientEntries.reduce((s, e) => s + entryAmount(e, cl), 0);
                 return (
                   <div key={clientId} style={{
                     background: "white", borderRadius: 14, marginBottom: 18,
@@ -336,14 +384,23 @@ export default function App() {
                           fontWeight: 900, fontSize: 26, color: GREEN,
                           background: LIGHTGREEN, padding: "6px 16px", borderRadius: 10, border: `2px solid ${GREEN}44`,
                         }}>{formatEuro(total)}</div>
-                        <button onClick={() => markInvoiced(clientEntries.map(e => e.id))} style={{
-                          marginTop: 8, background: GREEN, color: "white",
-                          border: "none", borderRadius: 8, padding: "8px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer",
-                        }}>✓ Afgerekend!</button>
+                        <div style={{ display: "flex", gap: 8, marginTop: 8, justifyContent: "flex-end" }}>
+                          {cl?.whatsapp && (
+                            <button onClick={() => sendWhatsApp(cl, clientEntries)} style={{
+                              background: "#25D366", color: "white",
+                              border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer",
+                              display: "flex", alignItems: "center", gap: 5,
+                            }}>📱 WhatsApp</button>
+                          )}
+                          <button onClick={() => markInvoiced(clientEntries.map(e => e.id))} style={{
+                            background: GREEN, color: "white",
+                            border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer",
+                          }}>✓ Afgerekend!</button>
+                        </div>
                       </div>
                     </div>
                     <div style={{ padding: "6px 0" }}>
-                      {clientEntries.map((e) => <Erow key={e.id} entry={e} client={cl} amount={totalHours(e) * (cl?.rate || 0)} />)}
+                      {clientEntries.map((e) => <Erow key={e.id} entry={e} client={cl} amount={entryAmount(e, cl)} />)}
                     </div>
                   </div>
                 );
@@ -358,7 +415,7 @@ export default function App() {
                 <div>
                   <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 12, fontWeight: 700, letterSpacing: 0.5 }}>TOTAAL OPENSTAAND</div>
                   <div style={{ color: "white", fontWeight: 900, fontSize: 28 }}>
-                    {formatEuro(uninvoiced.reduce((s, e) => s + totalHours(e) * (getClient(e.clientId)?.rate || 0), 0))}
+                    {formatEuro(uninvoiced.reduce((s, e) => { const c = getClient(e.clientId); return s + entryAmount(e, c); }, 0))}
                   </div>
                 </div>
                 <div style={{ fontSize: 40 }}>💰</div>
@@ -394,6 +451,7 @@ export default function App() {
                         <div style={{ fontWeight: 700, color: "#1a1a1a", fontSize: 16 }}>{c.name}</div>
                         <div style={{ fontSize: 12, color: "#999" }}>
                           {entries.filter(e => e.clientId === c.id).length} opdracht(en) · {entries.filter(e => e.clientId === c.id && !e.invoiced).length} open
+                          {c.whatsapp && <span> · 📱 {c.whatsapp}</span>}
                         </div>
                       </div>
                     </div>
@@ -401,8 +459,10 @@ export default function App() {
                       {editClientId === c.id ? (
                         <>
                           <input type="number" value={editRate} onChange={(e) => setEditRate(e.target.value)}
-                            style={{ ...inp, width: 80 }} step="0.50" />
-                          <button onClick={() => updateRate(c.id)} style={{
+                            style={{ ...inp, width: 80 }} step="0.50" placeholder="tarief" />
+                          <input type="tel" defaultValue={c.whatsapp || ""} id={"wa-" + c.id}
+                            style={{ ...inp, width: 120 }} placeholder="06-nummer" />
+                          <button onClick={async () => { await updateRate(c.id); await updateWhatsapp(c.id, document.getElementById("wa-" + c.id).value); }} style={{
                             background: GREEN, color: "white", border: "none",
                             borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontWeight: 700,
                           }}>✓</button>
@@ -459,6 +519,11 @@ export default function App() {
                   ))}
                 </div>
               </div>
+              <div style={{ marginTop: 14 }}>
+                <Lbl>WhatsApp nummer</Lbl>
+                <input type="tel" placeholder="bv. 0612345678" value={newClient.whatsapp}
+                  onChange={(e) => setNewClient({ ...newClient, whatsapp: e.target.value })} style={inp} />
+              </div>
               <Gbtn onClick={addClient} disabled={!newClient.name || !newClient.rate} style={{ marginTop: 18 }}>
                 + Klant toevoegen
               </Gbtn>
@@ -472,9 +537,9 @@ export default function App() {
             <Stitle>Overzicht & Historie</Stitle>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 20 }}>
               {[
-                { label: "Totaal verdiend", value: formatEuro(entries.reduce((s, e) => s + totalHours(e) * (getClient(e.clientId)?.rate || 0), 0)), icon: "💰", color: GREEN },
-                { label: "Al ontvangen", value: formatEuro(invoiced.reduce((s, e) => s + totalHours(e) * (getClient(e.clientId)?.rate || 0), 0)), icon: "✅", color: BLUE },
-                { label: "Nog te ontvangen", value: formatEuro(uninvoiced.reduce((s, e) => s + totalHours(e) * (getClient(e.clientId)?.rate || 0), 0)), icon: "⏳", color: "#e07b3c" },
+                { label: "Totaal verdiend", value: formatEuro(entries.reduce((s, e) => { const c = getClient(e.clientId); return s + entryAmount(e, c); }, 0)), icon: "💰", color: GREEN },
+                { label: "Al ontvangen", value: formatEuro(invoiced.reduce((s, e) => { const c = getClient(e.clientId); return s + entryAmount(e, c); }, 0)), icon: "✅", color: BLUE },
+                { label: "Nog te ontvangen", value: formatEuro(uninvoiced.reduce((s, e) => { const c = getClient(e.clientId); return s + entryAmount(e, c); }, 0)), icon: "⏳", color: "#e07b3c" },
               ].map((stat) => (
                 <div key={stat.label} style={{
                   background: "white", borderRadius: 12, padding: "14px 10px",
@@ -507,7 +572,7 @@ export default function App() {
               if (filtered.length === 0) return <div style={{ color: "#aaa", textAlign: "center", padding: 32 }}>Geen resultaten.</div>;
               return filtered.map((e) => {
                 const cl = getClient(e.clientId);
-                return <Ecard key={e.id} entry={e} client={cl} amount={totalHours(e) * (cl?.rate || 0)} onDelete={() => deleteEntry(e.id)} showStatus />;
+                return <Ecard key={e.id} entry={e} client={cl} amount={entryAmount(e, cl)} onDelete={() => deleteEntry(e.id)} showStatus />;
               });
             })()}
           </div>
