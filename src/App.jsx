@@ -58,6 +58,9 @@ export default function App() {
   const [filter, setFilter] = useState("all");
   const [showSuccess, setShowSuccess] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [invoiceClient, setInvoiceClient] = useState(null);
+  const [invoiceEntries, setInvoiceEntries] = useState([]);
+  const [invoiceImage, setInvoiceImage] = useState(null);
 
   // Real-time listener for clients
   useEffect(() => {
@@ -142,16 +145,212 @@ export default function App() {
     await updateDoc(doc(db, "clients", id), { whatsapp: number });
   };
 
+  const generateInvoiceImage = (client, clientEntries) => {
+    const total = clientEntries.reduce((s, e) => s + entryAmount(e, client), 0);
+    const W = 800;
+    const rowH = 52;
+    const headerH = 160;
+    const footerH = 100;
+    const tableHeaderH = 44;
+    const paddingRows = 24;
+    const H = headerH + tableHeaderH + clientEntries.length * rowH + paddingRows + footerH + 60;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext("2d");
+
+    // Background
+    ctx.fillStyle = "#e8f4fb";
+    ctx.fillRect(0, 0, W, H);
+
+    // Header gradient
+    const grad = ctx.createLinearGradient(0, 0, W, headerH);
+    grad.addColorStop(0, "#2a7a2e");
+    grad.addColorStop(1, "#1d5c21");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, headerH);
+
+    // Yellow stripe top
+    const stripeGrad = ctx.createLinearGradient(0, 0, W, 0);
+    stripeGrad.addColorStop(0, "#f9c832");
+    stripeGrad.addColorStop(0.5, "#f97316");
+    stripeGrad.addColorStop(1, "#f9c832");
+    ctx.fillStyle = stripeGrad;
+    ctx.fillRect(0, 0, W, 7);
+
+    // Hat emoji circle
+    ctx.fillStyle = "white";
+    ctx.beginPath();
+    ctx.arc(72, 88, 44, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#f9c832";
+    ctx.lineWidth = 4;
+    ctx.stroke();
+    ctx.font = "44px serif";
+    ctx.textAlign = "center";
+    ctx.fillText("🧢", 72, 103);
+
+    // Title
+    ctx.fillStyle = "white";
+    ctx.font = "bold 36px Arial Black, Arial";
+    ctx.textAlign = "left";
+    ctx.fillText("Giel pakt aan", 132, 78);
+
+    // Subtitle badge
+    ctx.fillStyle = "#1a5fa8";
+    ctx.beginPath();
+    ctx.roundRect(132, 90, 310, 26, 13);
+    ctx.fill();
+    ctx.fillStyle = "white";
+    ctx.font = "bold 13px Arial";
+    ctx.fillText("Jong · Betrouwbaar · Betaalbaar", 146, 108);
+
+    // Invoice label
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.font = "14px Arial";
+    ctx.textAlign = "right";
+    ctx.fillText("FACTUUROVERZICHT", W - 32, 72);
+
+    // Date
+    const now = new Date();
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.font = "13px Arial";
+    ctx.fillText(now.toLocaleDateString("nl-NL", { day: "numeric", month: "long", year: "numeric" }), W - 32, 94);
+
+    // Client name
+    ctx.fillStyle = "#f9c832";
+    ctx.font = "bold 20px Arial";
+    ctx.fillText("Voor: " + client.name, W - 32, 124);
+
+    // Price badge
+    ctx.fillStyle = "#f9c832";
+    ctx.beginPath();
+    ctx.roundRect(W - 160, 130, 128, 34, 8);
+    ctx.fill();
+    ctx.fillStyle = "#7a4a00";
+    ctx.font = "bold 13px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText("€" + Number(client.rate).toFixed(2).replace(".", ",") + " per uur", W - 96, 152);
+
+    // White card body
+    ctx.fillStyle = "white";
+    ctx.beginPath();
+    ctx.roundRect(20, headerH + 10, W - 40, H - headerH - 30, 14);
+    ctx.fill();
+    ctx.shadowColor = "rgba(0,0,0,0.08)";
+    ctx.shadowBlur = 12;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // Table header
+    const tY = headerH + 10;
+    ctx.fillStyle = "#2a7a2e";
+    ctx.beginPath();
+    ctx.roundRect(20, tY, W - 40, tableHeaderH, [14, 14, 0, 0]);
+    ctx.fill();
+
+    ctx.fillStyle = "white";
+    ctx.font = "bold 13px Arial";
+    ctx.textAlign = "left";
+    ctx.fillText("DATUM", 44, tY + 27);
+    ctx.fillText("WERKZAAMHEID", 190, tY + 27);
+    ctx.fillText("TIJD", 490, tY + 27);
+    ctx.textAlign = "right";
+    ctx.fillText("BEDRAG", W - 44, tY + 27);
+
+    // Rows
+    clientEntries.forEach((e, i) => {
+      const rY = tY + tableHeaderH + i * rowH;
+      ctx.fillStyle = i % 2 === 0 ? "#f9fcf9" : "white";
+      ctx.fillRect(20, rY, W - 40, rowH);
+
+      // Left border accent
+      ctx.fillStyle = client.color || GREEN;
+      ctx.fillRect(20, rY, 5, rowH);
+
+      ctx.fillStyle = "#444";
+      ctx.font = "13px Arial";
+      ctx.textAlign = "left";
+
+      const d = new Date(e.date);
+      ctx.fillText(d.toLocaleDateString("nl-NL", { day: "numeric", month: "short" }), 44, rY + 22);
+      ctx.font = "bold 13px Arial";
+      const taskText = e.task.length > 28 ? e.task.slice(0, 26) + "…" : e.task;
+      ctx.fillText(taskText, 190, rY + 22);
+
+      ctx.font = "13px Arial";
+      ctx.fillStyle = "#666";
+      if (e.notes) {
+        const noteText = e.notes.length > 28 ? e.notes.slice(0, 26) + "…" : e.notes;
+        ctx.fillText(noteText, 190, rY + 40);
+      }
+
+      ctx.fillStyle = "#444";
+      const h = Math.floor(e.hours);
+      const m = parseInt(e.minutes);
+      const tijdStr = e.fixedAmount != null ? "vast bedrag" : (h > 0 ? h + "u " : "") + (m > 0 ? m + "min" : (h === 0 ? "—" : ""));
+      ctx.fillText(tijdStr, 490, rY + 22);
+
+      ctx.textAlign = "right";
+      ctx.fillStyle = "#2a7a2e";
+      ctx.font = "bold 14px Arial";
+      ctx.fillText(formatEuro(entryAmount(e, client)), W - 44, rY + 22);
+    });
+
+    // Total row
+    const totY = tY + tableHeaderH + clientEntries.length * rowH + paddingRows;
+    ctx.fillStyle = "#e8f5e9";
+    ctx.fillRect(20, totY, W - 40, 52);
+    ctx.strokeStyle = "#2a7a2e44";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(20, totY, W - 40, 52);
+
+    ctx.fillStyle = "#1a1a1a";
+    ctx.font = "bold 16px Arial";
+    ctx.textAlign = "left";
+    ctx.fillText("TOTAAL TE BETALEN", 44, totY + 33);
+
+    ctx.fillStyle = "#2a7a2e";
+    ctx.font = "bold 22px Arial";
+    ctx.textAlign = "right";
+    ctx.fillText(formatEuro(total), W - 44, totY + 33);
+
+    // Footer
+    const fY = totY + 68;
+    ctx.fillStyle = "#2a7a2e";
+    ctx.font = "13px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText("📞 06-39785053   ✉ gieldeen@outlook.com", W / 2, fY + 18);
+    ctx.fillStyle = "#aaa";
+    ctx.font = "12px Arial";
+    ctx.fillText("Giel pakt aan — Jong, betrouwbaar en betaalbaar", W / 2, fY + 40);
+
+    return canvas.toDataURL("image/png");
+  };
+
+  const openInvoice = (client, clientEntries) => {
+    const img = generateInvoiceImage(client, clientEntries);
+    setInvoiceImage(img);
+    setInvoiceClient(client);
+    setInvoiceEntries(clientEntries);
+  };
+
   const sendWhatsApp = (client, clientEntries) => {
     const total = clientEntries.reduce((s, e) => s + entryAmount(e, client), 0);
     const regels = clientEntries.map(e => {
       const h = Math.floor(e.hours);
       const m = parseInt(e.minutes);
       const tijd = e.fixedAmount != null ? "vast bedrag" : (h > 0 ? h + "u" : "") + (m > 0 ? " " + m + "min" : "");
-      return "• " + formatDate(e.date) + ": " + e.task + " (" + tijd + ") = " + formatEuro(entryAmount(e, client));
+      return "• " + formatDate(e.date) + ": " + e.task + " (" + tijd + ") — " + formatEuro(entryAmount(e, client));
     }).join("\n");
-    const betaallink = "https://betaalverzoek.rabobank.nl/betaalverzoek/?color=ff6600&name=" + encodeURIComponent("Giel") + "&amount=" + total.toFixed(2) + "&description=" + encodeURIComponent("Klussen Giel");
-    const bericht = "Hoi " + client.name + "! 👋\n\nHier is mijn betalingsverzoek voor de uitgevoerde werkzaamheden:\n\n" + regels + "\n\n💰 *Totaal: " + formatEuro(total) + "*\n\nJe kunt betalen via deze Rabobank link:\n" + betaallink + "\n\nBedankt! 🧢 Giel";
+    const bericht = 
+      "Hoi " + client.name + "! 👋\n\n" +
+      "Hier is een overzicht van mijn werkzaamheden:\n\n" +
+      regels + "\n\n" +
+      "💰 *Totaal te betalen: " + formatEuro(total) + "*\n\n" +
+      "Je kunt het bedrag overmaken of ik stuur je zo een Rabobank betaalverzoek.\n\n" +
+      "Bedankt! 🧢 Giel";
     const nummer = client.whatsapp.replace(/[^0-9]/g, "").replace(/^0/, "31");
     window.open("https://wa.me/" + nummer + "?text=" + encodeURIComponent(bericht), "_blank");
   };
@@ -385,13 +584,10 @@ export default function App() {
                           background: LIGHTGREEN, padding: "6px 16px", borderRadius: 10, border: `2px solid ${GREEN}44`,
                         }}>{formatEuro(total)}</div>
                         <div style={{ display: "flex", gap: 8, marginTop: 8, justifyContent: "flex-end" }}>
-                          {cl?.whatsapp && (
-                            <button onClick={() => sendWhatsApp(cl, clientEntries)} style={{
-                              background: "#25D366", color: "white",
-                              border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer",
-                              display: "flex", alignItems: "center", gap: 5,
-                            }}>📱 WhatsApp</button>
-                          )}
+                          <button onClick={() => openInvoice(cl, clientEntries)} style={{
+                            background: "#1a5fa8", color: "white",
+                            border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer",
+                          }}>🧾 Factuur</button>
                           <button onClick={() => markInvoiced(clientEntries.map(e => e.id))} style={{
                             background: GREEN, color: "white",
                             border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer",
@@ -578,6 +774,114 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {/* INVOICE MODAL */}
+      {invoiceImage && invoiceClient && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+          background: "rgba(0,0,0,0.75)", zIndex: 1000,
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start",
+          overflowY: "auto", padding: "20px 16px",
+        }}>
+          <div style={{
+            background: "white", borderRadius: 16, overflow: "hidden",
+            maxWidth: 600, width: "100%", boxShadow: "0 8px 40px #0006",
+          }}>
+            {/* Modal header */}
+            <div style={{
+              background: "linear-gradient(135deg, #2a7a2e, #1d5c21)",
+              padding: "14px 20px", display: "flex", justifyContent: "space-between", alignItems: "center",
+            }}>
+              <div style={{ color: "white", fontWeight: 700, fontSize: 16 }}>🧾 Factuuroverzicht — {invoiceClient.name}</div>
+              <button onClick={() => setInvoiceImage(null)} style={{
+                background: "rgba(255,255,255,0.2)", color: "white", border: "none",
+                borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontWeight: 700, fontSize: 14,
+              }}>✕</button>
+            </div>
+
+            {/* Step indicators */}
+            <div style={{ background: "#f9fcf9", borderBottom: "1px solid #e0ede0", padding: "12px 20px" }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: GREEN, marginBottom: 8, letterSpacing: 0.5, textTransform: "uppercase" }}>Zo stuur je de factuur via WhatsApp:</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {[
+                  { step: "1", icon: "💾", text: "Sla de factuur op" },
+                  { step: "2", icon: "📱", text: "Open WhatsApp" },
+                  { step: "3", icon: "📎", text: "Voeg als bijlage toe" },
+                ].map((s) => (
+                  <div key={s.step} style={{
+                    flex: 1, background: "white", borderRadius: 10, padding: "10px 8px",
+                    textAlign: "center", border: "1px solid #d0e8d0",
+                  }}>
+                    <div style={{ fontSize: 20 }}>{s.icon}</div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#444", marginTop: 4, lineHeight: 1.3 }}>{s.text}</div>
+                    <div style={{
+                      width: 20, height: 20, borderRadius: "50%", background: GREEN,
+                      color: "white", fontSize: 11, fontWeight: 900,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      margin: "6px auto 0",
+                    }}>{s.step}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Invoice image with tap hint */}
+            <div style={{ padding: 16, background: "#e8f4fb", position: "relative" }}>
+              <img src={invoiceImage} alt="Factuur" style={{ width: "100%", borderRadius: 10, boxShadow: "0 2px 12px #0002", display: "block" }} />
+              <div style={{
+                marginTop: 8, background: "rgba(0,0,0,0.55)", color: "white",
+                borderRadius: 8, padding: "7px 12px", fontSize: 12, textAlign: "center", fontWeight: 600,
+              }}>
+                📲 Op telefoon: houd je vinger op de afbeelding → "Afbeelding opslaan"
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
+
+              {/* Primary: save image */}
+              <a
+                href={invoiceImage}
+                download={"factuur-" + invoiceClient.name.toLowerCase() + "-" + new Date().toISOString().slice(0,10) + ".png"}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+                  background: `linear-gradient(135deg, ${GREEN}, #1d6021)`,
+                  color: "white", borderRadius: 12, padding: "14px",
+                  fontWeight: 700, fontSize: 16, textDecoration: "none",
+                  boxShadow: "0 4px 14px #2a7a2e44",
+                }}
+              >
+                <span style={{ fontSize: 22 }}>💾</span>
+                <div style={{ textAlign: "left" }}>
+                  <div>Factuur opslaan</div>
+                  <div style={{ fontSize: 11, fontWeight: 400, opacity: 0.85 }}>Daarna als bijlage in WhatsApp sturen</div>
+                </div>
+              </a>
+
+              {/* Secondary: open WhatsApp with text */}
+              {invoiceClient.whatsapp && (
+                <button onClick={() => sendWhatsApp(invoiceClient, invoiceEntries)} style={{
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+                  background: "#25D366", color: "white", border: "none",
+                  borderRadius: 12, padding: "14px", fontWeight: 700, fontSize: 16, cursor: "pointer",
+                  boxShadow: "0 4px 14px #25d36644",
+                }}>
+                  <span style={{ fontSize: 22 }}>📱</span>
+                  <div style={{ textAlign: "left" }}>
+                    <div>WhatsApp openen</div>
+                    <div style={{ fontSize: 11, fontWeight: 400, opacity: 0.9 }}>Tekstoverzicht klaar voor {invoiceClient.name}</div>
+                  </div>
+                </button>
+              )}
+
+              <button onClick={() => setInvoiceImage(null)} style={{
+                background: "#f0f0f0", color: "#888", border: "none",
+                borderRadius: 12, padding: "12px", fontWeight: 600, fontSize: 14, cursor: "pointer",
+              }}>Sluiten</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* FOOTER */}
       <div style={{ background: `linear-gradient(135deg, ${GREEN}, #1a5c1e)`, padding: "14px 20px", textAlign: "center", marginTop: 20 }}>
